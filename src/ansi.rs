@@ -677,6 +677,40 @@ pub trait Handler {
     ///
     /// The output is of form `CSI > 4 ; mode m`.
     fn report_modify_other_keys(&mut self) {}
+
+    /// Report a graphics attribute.
+    fn graphics_attribute(&mut self, _: u16, _: u16) {}
+
+    /// Start of a device control string.
+    fn dcs_hook(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        debug!(
+            "[unhandled hook] params={:?}, ints: {:?}, ignore: {:?}, action: {:?}",
+            params, intermediates, ignore, action
+        );
+    }
+
+    /// Byte of a device control string.
+    fn dcs_put(&mut self, byte: u8) {
+        debug!("[unhandled put] byte={:?}", byte);
+    }
+
+    /// End of a device control string.
+    fn dcs_unhook(&mut self) {
+        debug!("[unhandled unhook]");
+    }
+
+    /// Unknown OSC.
+    fn osc_unhandled(&mut self, params: &[&[u8]], _terminator: &str) {
+        let mut buf = String::new();
+        for items in params {
+            buf.push('[');
+            for item in *items {
+                let _ = write!(buf, "{:?}", *item as char);
+            }
+            buf.push_str("],");
+        }
+        debug!("[osc_unhandled]: [{}]", &buf);
+    }
 }
 
 bitflags! {
@@ -1223,36 +1257,27 @@ where
 
     #[inline]
     fn hook(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
-        debug!(
-            "[unhandled hook] params={:?}, ints: {:?}, ignore: {:?}, action: {:?}",
-            params, intermediates, ignore, action
-        );
+        self.handler.dcs_hook(params, intermediates, ignore, action);
     }
 
     #[inline]
     fn put(&mut self, byte: u8) {
-        debug!("[unhandled put] byte={:?}", byte);
+        self.handler.dcs_put(byte)
     }
 
     #[inline]
     fn unhook(&mut self) {
-        debug!("[unhandled unhook]");
+        self.handler.dcs_unhook()
     }
 
     #[inline]
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
         let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
 
-        fn unhandled(params: &[&[u8]]) {
-            let mut buf = String::new();
-            for items in params {
-                buf.push('[');
-                for item in *items {
-                    let _ = write!(buf, "{:?}", *item as char);
-                }
-                buf.push_str("],");
-            }
-            debug!("[unhandled osc_dispatch]: [{}] at line {}", &buf, line!());
+        macro_rules! unhandled {
+            () => {{
+                self.handler.osc_unhandled(params, terminator);
+            }};
         }
 
         if params.is_empty() || params[0].is_empty() {
@@ -1273,13 +1298,13 @@ where
                     self.handler.set_title(Some(title));
                     return;
                 }
-                unhandled(params);
+                unhandled!();
             },
 
             // Set color index.
             b"4" => {
                 if params.len() <= 1 || params.len() % 2 == 0 {
-                    unhandled(params);
+                    unhandled!();
                     return;
                 }
 
@@ -1287,7 +1312,7 @@ where
                     let index = match parse_number(chunk[0]) {
                         Some(index) => index,
                         None => {
-                            unhandled(params);
+                            unhandled!();
                             continue;
                         },
                     };
@@ -1298,7 +1323,7 @@ where
                         let prefix = alloc::format!("4;{index}");
                         self.handler.dynamic_color_sequence(prefix, index as usize, terminator);
                     } else {
-                        unhandled(params);
+                        unhandled!();
                     }
                 }
             },
@@ -1343,7 +1368,7 @@ where
 
                             // End of setting dynamic colors.
                             if index > NamedColor::Cursor as usize {
-                                unhandled(params);
+                                unhandled!();
                                 break;
                             }
 
@@ -1356,14 +1381,14 @@ where
                                     terminator,
                                 );
                             } else {
-                                unhandled(params);
+                                unhandled!();
                             }
                             dynamic_code += 1;
                         }
                         return;
                     }
                 }
-                unhandled(params);
+                unhandled!();
             },
 
             // Set mouse cursor shape.
@@ -1385,18 +1410,18 @@ where
                         '0' => CursorShape::Block,
                         '1' => CursorShape::Beam,
                         '2' => CursorShape::Underline,
-                        _ => return unhandled(params),
+                        _ => return unhandled!(),
                     };
                     self.handler.set_cursor_shape(shape);
                     return;
                 }
-                unhandled(params);
+                unhandled!();
             },
 
             // Set clipboard.
             b"52" => {
                 if params.len() < 3 {
-                    return unhandled(params);
+                    return unhandled!();
                 }
 
                 let clipboard = params[1].first().unwrap_or(&b'c');
@@ -1420,7 +1445,7 @@ where
                 for param in &params[1..] {
                     match parse_number(param) {
                         Some(index) => self.handler.reset_color(index as usize),
-                        None => unhandled(params),
+                        None => unhandled!(),
                     }
                 }
             },
@@ -1434,7 +1459,7 @@ where
             // Reset text cursor color.
             b"112" => self.handler.reset_color(NamedColor::Cursor as usize),
 
-            _ => unhandled(params),
+            _ => unhandled!(),
         }
     }
 
@@ -1627,6 +1652,7 @@ where
                 handler.set_scrolling_region(top, bottom);
             },
             ('S', []) => handler.scroll_up(next_param_or(1) as usize),
+            ('S', [b'?']) => handler.graphics_attribute(next_param_or(0), next_param_or(0)),
             ('s', []) => handler.save_cursor_position(),
             ('T', []) => handler.scroll_down(next_param_or(1) as usize),
             ('t', []) => match next_param_or(1) as usize {
