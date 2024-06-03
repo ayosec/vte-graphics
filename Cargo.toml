@@ -1,15 +1,15 @@
 [package]
 authors = ["Joe Wilm <joe@jwilm.com>", "Christian Duerr <contact@christianduerr.com>"]
-description = "Parser for implementing terminal emulators"
-repository = "https://github.com/alacritty/vte"
-documentation = "https://docs.rs/vte/"
+description = "vte fork for the Alacritty's graphics patch"
+repository = "https://github.com/ayosec/vte-graphics"
+documentation = "https://docs.rs/vte-graphics/"
 keywords = ["ansi", "vte", "parser", "terminal"]
 categories = ["parsing", "no-std"]
 exclude = ["/.travis.yml"]
 readme = "README.md"
 license = "Apache-2.0 OR MIT"
 version = "0.13.0"
-name = "vte"
+name = "vte-graphics"
 edition = "2021"
 rust-version = "1.62.1"
 
