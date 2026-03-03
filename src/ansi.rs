@@ -748,6 +748,21 @@ pub trait Handler {
         debug!("[unhandled unhook]");
     }
 
+    /// Called when an APC sequence starts (ESC _ received).
+    fn apc_start(&mut self) {
+        debug!("[unhandled apc_start]");
+    }
+
+    /// Byte of an APC string.
+    fn apc_put(&mut self, byte: u8) {
+        debug!("[unhandled apc_put] byte={:?}", byte);
+    }
+
+    /// End of an APC string.
+    fn apc_end(&mut self) {
+        debug!("[unhandled apc_end]");
+    }
+
     /// Unknown OSC.
     fn osc_unhandled(&mut self, params: &[&[u8]], _terminator: &str) {
         let mut buf = String::new();
@@ -1354,6 +1369,21 @@ where
     #[inline]
     fn unhook(&mut self) {
         self.handler.dcs_unhook()
+    }
+
+    #[inline]
+    fn apc_start(&mut self) {
+        self.handler.apc_start();
+    }
+
+    #[inline]
+    fn apc_put(&mut self, byte: u8) {
+        self.handler.apc_put(byte);
+    }
+
+    #[inline]
+    fn apc_end(&mut self) {
+        self.handler.apc_end();
     }
 
     #[inline]
