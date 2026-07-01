@@ -558,6 +558,13 @@ pub trait Handler {
     /// Hopefully this is never implemented.
     fn bell(&mut self) {}
 
+    /// A desktop-notification / attention request from the application, decoded
+    /// from `OSC 9 ; <body> ST` (iTerm2/ConEmu) or
+    /// `OSC 777 ; notify ; <title> ; <body> ST` (urxvt/rxvt-notify). `title` is
+    /// empty for the OSC 9 form. Default no-op so unaffected `Handler` impls
+    /// keep compiling.
+    fn report_notification(&mut self, _title: String, _body: String) {}
+
     /// Substitute char under cursor.
     fn substitute(&mut self) {}
 
@@ -1547,6 +1554,45 @@ where
                 }
             },
 
+            // Desktop notification (iTerm2 / ConEmu): `OSC 9 ; <body> ST`.
+            // Tolerant of a missing/empty body; the whole payload after the
+            // `9;` is the notification text (rejoin on `;` in case the body
+            // itself contained a separator).
+            b"9" => {
+                let body = params[1..]
+                    .iter()
+                    .flat_map(|param| str::from_utf8(param))
+                    .collect::<Vec<&str>>()
+                    .join(";");
+                self.handler.report_notification(String::new(), body);
+            },
+
+            // Desktop notification (urxvt/rxvt-notify):
+            // `OSC 777 ; notify ; <title> ; <body> ST`. Only the `notify`
+            // subcommand is handled; anything else is ignored. Missing title or
+            // body degrade to empty strings rather than erroring.
+            b"777" => {
+                if params.len() >= 2 && params[1] == b"notify" {
+                    let title = params
+                        .get(2)
+                        .and_then(|param| str::from_utf8(param).ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    let body = if params.len() > 3 {
+                        params[3..]
+                            .iter()
+                            .flat_map(|param| str::from_utf8(param))
+                            .collect::<Vec<&str>>()
+                            .join(";")
+                    } else {
+                        String::new()
+                    };
+                    self.handler.report_notification(title, body);
+                } else {
+                    unhandled!();
+                }
+            },
+
             // Reset color index.
             b"104" => {
                 // Reset all color indexes when no parameters are given.
@@ -2102,11 +2148,16 @@ mod tests {
         identity_reported: bool,
         color: Option<Rgb>,
         reset_colors: Vec<usize>,
+        notifications: Vec<(String, String)>,
     }
 
     impl Handler for MockHandler {
         fn terminal_attribute(&mut self, attr: Attr) {
             self.attr = Some(attr);
+        }
+
+        fn report_notification(&mut self, title: String, body: String) {
+            self.notifications.push((title, body));
         }
 
         fn configure_charset(&mut self, index: CharsetIndex, charset: StandardCharset) {
@@ -2144,8 +2195,51 @@ mod tests {
                 identity_reported: false,
                 color: None,
                 reset_colors: Vec::new(),
+                notifications: Vec::new(),
             }
         }
+    }
+
+    #[test]
+    fn parse_osc_9_desktop_notification() {
+        // `OSC 9 ; <body> BEL`
+        let bytes: &[u8] = b"\x1b]9;Build finished\x07";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+
+        parser.advance(&mut handler, bytes);
+
+        assert_eq!(
+            handler.notifications,
+            vec![(String::new(), "Build finished".to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_osc_777_notify() {
+        // `OSC 777 ; notify ; <title> ; <body> BEL`
+        let bytes: &[u8] = b"\x1b]777;notify;Claude;Turn complete\x07";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+
+        parser.advance(&mut handler, bytes);
+
+        assert_eq!(
+            handler.notifications,
+            vec![("Claude".to_string(), "Turn complete".to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_osc_777_non_notify_is_ignored() {
+        // A non-`notify` OSC 777 subcommand must not raise a notification.
+        let bytes: &[u8] = b"\x1b]777;precmd\x07";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+
+        parser.advance(&mut handler, bytes);
+
+        assert!(handler.notifications.is_empty());
     }
 
     #[test]
